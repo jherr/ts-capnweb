@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  createCollection,
+  localOnlyCollectionOptions,
+} from "@tanstack/react-db";
 
 // Define sync status enum
 export const SyncStatusSchema = z.enum([
@@ -22,67 +26,13 @@ export const NoteSchema = z.object({
 
 export type Note = z.infer<typeof NoteSchema>;
 
-// Simple in-memory store for notes with reactive updates
-class NotesStore {
-  private notes = new Map<string, Note>();
-  private listeners = new Set<() => void>();
-  private cachedSnapshot: Note[] | null = null;
+// Create TanStack DB collection using localOnlyCollectionOptions
+// This properly configures a local-first collection
+export const notesCollection = createCollection(
+  localOnlyCollectionOptions({
+    getKey: (note: Note) => note.id,
+    schema: NoteSchema,
+  })
+);
 
-  insert(note: Note) {
-    this.notes.set(note.id, note);
-    this.cachedSnapshot = null;
-    this.notify();
-  }
-
-  update(id: string, updates: Partial<Note>) {
-    const existing = this.notes.get(id);
-    if (existing) {
-      this.notes.set(id, { ...existing, ...updates });
-      this.cachedSnapshot = null;
-      this.notify();
-    }
-  }
-
-  delete(id: string) {
-    const deleted = this.notes.delete(id);
-    if (deleted) {
-      this.cachedSnapshot = null;
-      this.notify();
-    }
-  }
-
-  get(id: string): Note | undefined {
-    return this.notes.get(id);
-  }
-
-  getAll(): Note[] {
-    return Array.from(this.notes.values());
-  }
-
-  // Get snapshot for useSyncExternalStore - returns stable reference
-  getSnapshot(): Note[] {
-    if (this.cachedSnapshot === null) {
-      this.cachedSnapshot = Array.from(this.notes.values()).sort(
-        (a, b) => b.updatedAt - a.updatedAt
-      );
-    }
-    return this.cachedSnapshot;
-  }
-
-  clear() {
-    this.notes.clear();
-    this.cachedSnapshot = null;
-    this.notify();
-  }
-
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private notify() {
-    this.listeners.forEach((listener) => listener());
-  }
-}
-
-export const notesStore = new NotesStore();
+console.log("📦 Notes collection created successfully");

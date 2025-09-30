@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { newWebSocketRpcSession } from "capnweb";
-import { notesStore } from "@/db-collections";
+import { notesCollection } from "@/db-collections";
 import type { Note } from "@/db-collections";
 
 export interface NotesAPI {
@@ -36,9 +36,7 @@ export function useNotesSync() {
 
   const apiRef = useRef<NotesAPI | null>(null);
   const clientIdRef = useRef<string>(generateClientId());
-
-  // Note: Broadcaster setup is handled server-side
-  // Updates are received via pollUpdates()
+  const syncedNotesRef = useRef<Set<string>>(new Set());
 
   const connect = useCallback(async () => {
     setState((prev) => ({
@@ -67,14 +65,31 @@ export function useNotesSync() {
       const result = await api.connect(clientIdRef.current);
       console.log("Notes RPC connection established");
 
-      // Sync initial notes to store
+      // Sync initial notes from server to TanStack DB collection
       if (result.notes && Array.isArray(result.notes)) {
         console.log(`📥 Received ${result.notes.length} notes from server`);
 
-        // Clear and populate with server notes
-        notesStore.clear();
+        // Delete any notes not in the server response
+        syncedNotesRef.current.forEach((noteId) => {
+          if (!result.notes.find((n: Note) => n.id === noteId)) {
+            notesCollection.delete(noteId);
+            syncedNotesRef.current.delete(noteId);
+          }
+        });
+
+        // Insert or update notes from server
         result.notes.forEach((note: Note) => {
-          notesStore.insert({ ...note, syncStatus: "synced" });
+          try {
+            notesCollection.insert({ ...note, syncStatus: "synced" });
+            syncedNotesRef.current.add(note.id);
+          } catch (error) {
+            // If insert fails (duplicate key), update instead
+            notesCollection.update(note.id, (draft) => {
+              Object.assign(draft, note);
+              draft.syncStatus = "synced";
+            });
+            syncedNotesRef.current.add(note.id);
+          }
         });
       }
 
@@ -105,8 +120,11 @@ export function useNotesSync() {
       apiRef.current = null;
     }
 
-    // Clear store
-    notesStore.clear();
+    // Delete all synced notes on disconnect
+    syncedNotesRef.current.forEach((noteId) => {
+      notesCollection.delete(noteId);
+    });
+    syncedNotesRef.current.clear();
 
     setState({
       isConnected: false,
@@ -128,14 +146,25 @@ export function useNotesSync() {
 
         updates.forEach((update: any) => {
           if (update.type === "note_created") {
-            notesStore.insert({ ...update.note, syncStatus: "synced" });
+            try {
+              notesCollection.insert({ ...update.note, syncStatus: "synced" });
+              syncedNotesRef.current.add(update.note.id);
+            } catch (error) {
+              // If note already exists, update it
+              notesCollection.update(update.note.id, (draft) => {
+                Object.assign(draft, update.note);
+                draft.syncStatus = "synced";
+              });
+            }
           } else if (update.type === "note_updated") {
-            notesStore.update(update.note.id, {
-              ...update.note,
-              syncStatus: "synced",
+            notesCollection.update(update.note.id, (draft) => {
+              Object.assign(draft, update.note);
+              draft.syncStatus = "synced";
             });
+            syncedNotesRef.current.add(update.note.id);
           } else if (update.type === "note_deleted") {
-            notesStore.delete(update.noteId);
+            notesCollection.delete(update.noteId);
+            syncedNotesRef.current.delete(update.noteId);
           }
         });
       }

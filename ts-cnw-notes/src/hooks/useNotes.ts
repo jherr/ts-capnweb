@@ -1,5 +1,6 @@
-import { useCallback, useSyncExternalStore, useMemo } from "react";
-import { notesStore } from "@/db-collections";
+import { useCallback, useMemo } from "react";
+import { useLiveQuery } from "@tanstack/react-db";
+import { notesCollection } from "@/db-collections";
 import type { Note, SyncStatus } from "@/db-collections";
 import type { NotesAPI } from "./useNotesSync";
 
@@ -9,12 +10,15 @@ function generateNoteId(): string {
 }
 
 export function useNotes(api: NotesAPI | null, isConnected: boolean) {
-  // Get all notes from store with reactive updates
-  const allNotes = useSyncExternalStore(
-    (listener) => notesStore.subscribe(listener),
-    () => notesStore.getSnapshot(),
-    () => []
-  );
+  // Use TanStack DB's useLiveQuery for reactive data (matches working example)
+  const { data: allNotes = [] } = useLiveQuery((q) =>
+    q
+      .from({ note: notesCollection })
+      .select(({ note }) => ({
+        ...note,
+      }))
+      .orderBy(({ note }) => note.updatedAt, "desc")
+  ) as { data: Note[] };
 
   // Create a new note
   const createNote = useCallback(
@@ -28,24 +32,28 @@ export function useNotes(api: NotesAPI | null, isConnected: boolean) {
         syncStatus: isConnected ? "pending" : "offline",
       };
 
-      // Optimistically add to local store
-      notesStore.insert(note);
+      // Optimistically add to TanStack DB collection
+      notesCollection.insert(note);
       console.log("📝 Created note locally:", note.id);
 
       // Sync to server if connected
       if (api && isConnected) {
         try {
-          notesStore.update(note.id, { syncStatus: "syncing" });
+          notesCollection.update(note.id, (draft) => {
+            draft.syncStatus = "syncing";
+          });
           const result = await api.createNote(note);
-          notesStore.update(result.note.id, {
-            ...result.note,
-            syncStatus: "synced",
+          notesCollection.update(result.note.id, (draft) => {
+            Object.assign(draft, result.note);
+            draft.syncStatus = "synced";
           });
           console.log("✅ Note synced to server:", note.id);
           return { success: true, note: result.note };
         } catch (error) {
           console.error("Error syncing note:", error);
-          notesStore.update(note.id, { syncStatus: "error" });
+          notesCollection.update(note.id, (draft) => {
+            draft.syncStatus = "error";
+          });
           return {
             success: false,
             error:
@@ -65,33 +73,39 @@ export function useNotes(api: NotesAPI | null, isConnected: boolean) {
       noteId: string,
       updates: Partial<Pick<Note, "title" | "content">>
     ) => {
-      const existingNote = notesStore.get(noteId);
+      const existingNote = allNotes.find((n) => n.id === noteId);
 
       if (!existingNote) {
         return { success: false, error: "Note not found" };
       }
 
-      const updatedData = {
-        ...updates,
-        updatedAt: Date.now(),
-        syncStatus: (isConnected ? "pending" : "offline") as SyncStatus,
-      };
-
-      // Optimistically update local store
-      notesStore.update(noteId, updatedData);
+      // Optimistically update TanStack DB collection
+      notesCollection.update(noteId, (draft) => {
+        if (updates.title !== undefined) draft.title = updates.title;
+        if (updates.content !== undefined) draft.content = updates.content;
+        draft.updatedAt = Date.now();
+        draft.syncStatus = (isConnected ? "pending" : "offline") as SyncStatus;
+      });
       console.log("✏️  Updated note locally:", noteId);
 
       // Sync to server if connected
       if (api && isConnected) {
         try {
-          notesStore.update(noteId, { syncStatus: "syncing" });
+          notesCollection.update(noteId, (draft) => {
+            draft.syncStatus = "syncing";
+          });
           const result = await api.updateNote(noteId, updates);
-          notesStore.update(noteId, { ...result.note, syncStatus: "synced" });
+          notesCollection.update(noteId, (draft) => {
+            Object.assign(draft, result.note);
+            draft.syncStatus = "synced";
+          });
           console.log("✅ Note synced to server:", noteId);
           return { success: true, note: result.note };
         } catch (error) {
           console.error("Error syncing note:", error);
-          notesStore.update(noteId, { syncStatus: "error" });
+          notesCollection.update(noteId, (draft) => {
+            draft.syncStatus = "error";
+          });
           return {
             success: false,
             error:
@@ -100,17 +114,17 @@ export function useNotes(api: NotesAPI | null, isConnected: boolean) {
         }
       }
 
-      const updatedNote = notesStore.get(noteId);
+      const updatedNote = allNotes.find((n) => n.id === noteId);
       return { success: true, note: updatedNote };
     },
-    [api, isConnected]
+    [api, isConnected, allNotes]
   );
 
   // Delete a note
   const deleteNote = useCallback(
     async (noteId: string) => {
-      // Optimistically delete from local store
-      notesStore.delete(noteId);
+      // Optimistically delete from TanStack DB collection
+      notesCollection.delete(noteId);
       console.log("🗑️  Deleted note locally:", noteId);
 
       // Sync to server if connected
@@ -165,9 +179,11 @@ export function useNotes(api: NotesAPI | null, isConnected: boolean) {
       error: 0,
     };
 
-    allNotes.forEach((note) => {
+    allNotes.forEach((note: Note) => {
       const status = note.syncStatus || "synced";
-      stats[status]++;
+      if (status in stats) {
+        stats[status as keyof typeof stats]++;
+      }
     });
 
     return stats;

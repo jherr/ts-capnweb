@@ -8,6 +8,7 @@ import { NotesList } from "@/components/NotesList";
 import { NoteEditor } from "@/components/NoteEditor";
 
 export const Route = createFileRoute("/")({
+  ssr: false,
   component: NotesApp,
 });
 

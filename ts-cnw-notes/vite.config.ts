@@ -1,20 +1,40 @@
 import { defineConfig } from "vite";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
-import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import { websocketRpcPlugin } from "./notes-server/vite-plugin";
 
 const config = defineConfig({
   plugins: [
-    TanStackRouterVite(),
-    viteReact(),
     viteTsConfigPaths({
       projects: ["./tsconfig.json"],
     }),
     tailwindcss(),
-    websocketRpcPlugin(), // Add WebSocket RPC plugin
+    tanstackStart(),
+    viteReact(),
+    websocketRpcPlugin(),
   ],
+  server: {
+    port: 3000,
+    host: true,
+  },
+  build: {
+    target: "es2022",
+    rollupOptions: {
+      output: {
+        format: "es",
+      },
+    },
+  },
+  esbuild: {
+    target: "es2022",
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: "es2022",
+    },
+  },
 });
 
 export default config;
