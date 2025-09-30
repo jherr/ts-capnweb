@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+pnpm-lock.yaml
+
+# Build outputs
+dist/
+.output/
+.vinxi/
+.tanstack/
+
+# Environment
+.env
+.env.local
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
